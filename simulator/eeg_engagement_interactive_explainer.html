@@ -1,0 +1,148 @@
+
+<style>
+  .section { margin: 0 0 2rem; }
+  .band-row { display: flex; align-items: center; gap: 12px; margin: 0 0 1rem; }
+  .band-label { font-size: 13px; font-weight: 500; min-width: 80px; color: var(--color-text-secondary); }
+  .band-hz { font-size: 11px; color: var(--color-text-tertiary); min-width: 60px; }
+  .band-val { font-size: 13px; font-weight: 500; min-width: 36px; text-align: right; color: var(--color-text-primary); }
+  .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 0 1.5rem; }
+  .metric { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 0.75rem 1rem; }
+  .metric-label { font-size: 11px; color: var(--color-text-secondary); margin: 0 0 4px; }
+  .metric-val { font-size: 20px; font-weight: 500; color: var(--color-text-primary); margin: 0; }
+  .state-bar { height: 10px; border-radius: 5px; background: var(--color-background-secondary); overflow: hidden; margin: 0 0 0.5rem; }
+  .state-fill { height: 100%; border-radius: 5px; transition: width 0.3s ease, background 0.3s ease; }
+  .state-label { font-size: 13px; font-weight: 500; }
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 1.5rem; }
+  .preset-btn { font-size: 12px; padding: 5px 12px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-primary); cursor: pointer; }
+  .preset-btn:hover { background: var(--color-background-secondary); }
+  .divider { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 1.5rem 0; }
+  .explain-box { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 0.75rem 1rem; margin: 0 0 1rem; font-size: 13px; color: var(--color-text-secondary); line-height: 1.6; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: var(--border-radius-md); margin-right: 4px; }
+</style>
+
+<h2 style="font-size: 18px; font-weight: 500; margin: 1.5rem 0 0.5rem; color: var(--color-text-primary);">EEG engagement index simulator</h2>
+<p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 1.5rem;">Adjust brainwave power levels to see how the engagement index changes. Based on Pope et al. (1995).</p>
+
+<div class="preset-row">
+  <button class="preset-btn" onclick="setPreset(2,85,10)">Eyes closed (resting)</button>
+  <button class="preset-btn" onclick="setPreset(5,30,25)">Eyes open (idle)</button>
+  <button class="preset-btn" onclick="setPreset(8,15,40)">Mental arithmetic</button>
+  <button class="preset-btn" onclick="setPreset(12,10,50)">Deep focus</button>
+</div>
+
+<div class="section">
+  <div class="band-row">
+    <span class="band-label">Theta</span>
+    <span class="band-hz">4–7 Hz</span>
+    <input type="range" min="1" max="30" value="5" id="theta" oninput="update()" style="flex:1;" step="1">
+    <span class="band-val" id="theta-out">5</span>
+  </div>
+  <div class="band-row">
+    <span class="band-label">Alpha</span>
+    <span class="band-hz">8–12 Hz</span>
+    <input type="range" min="1" max="100" value="40" id="alpha" oninput="update()" style="flex:1;" step="1">
+    <span class="band-val" id="alpha-out">40</span>
+  </div>
+  <div class="band-row">
+    <span class="band-label">Beta</span>
+    <span class="band-hz">13–30 Hz</span>
+    <input type="range" min="1" max="60" value="25" id="beta" oninput="update()" style="flex:1;" step="1">
+    <span class="band-val" id="beta-out">25</span>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="metric-grid">
+  <div class="metric">
+    <p class="metric-label">Alpha / Beta ratio</p>
+    <p class="metric-val" id="ab-ratio">1.60</p>
+  </div>
+  <div class="metric">
+    <p class="metric-label">Engagement index</p>
+    <p class="metric-val" id="eng-idx">0.37</p>
+  </div>
+  <div class="metric">
+    <p class="metric-label">Dominant band</p>
+    <p class="metric-val" id="dom-band" style="font-size:14px;">Alpha</p>
+  </div>
+</div>
+
+<div style="margin: 0 0 0.5rem;">
+  <div style="display:flex; justify-content:space-between; margin:0 0 4px;">
+    <span style="font-size:12px; color:var(--color-text-secondary);">Low engagement</span>
+    <span style="font-size:12px; color:var(--color-text-secondary);">High engagement</span>
+  </div>
+  <div class="state-bar">
+    <div class="state-fill" id="eng-fill" style="width:37%;"></div>
+  </div>
+  <div style="text-align:center;">
+    <span class="state-label" id="state-text">Idle / resting</span>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="explain-box" id="explain-box">
+  Alpha is dominant. The brain is in a relaxed, idling state — visual cortex is quiet, internal thought is low-effort. This matches eyes-closed or unfocused resting.
+</div>
+
+<button class="preset-btn" style="font-size:13px; padding:7px 16px;" onclick="sendPrompt('Can you explain the neuroscience behind why alpha waves increase when eyes are closed?')">Learn why alpha rises at rest ↗</button>
+
+<script>
+function setPreset(t, a, b) {
+  document.getElementById('theta').value = t;
+  document.getElementById('alpha').value = a;
+  document.getElementById('beta').value = b;
+  update();
+}
+
+function update() {
+  const theta = parseFloat(document.getElementById('theta').value);
+  const alpha = parseFloat(document.getElementById('alpha').value);
+  const beta = parseFloat(document.getElementById('beta').value);
+
+  document.getElementById('theta-out').textContent = theta;
+  document.getElementById('alpha-out').textContent = alpha;
+  document.getElementById('beta-out').textContent = beta;
+
+  const abRatio = alpha / (beta + 0.001);
+  const engIdx = beta / (alpha + theta + 0.001);
+  const engPct = Math.min(Math.max(engIdx * 100, 2), 98);
+
+  document.getElementById('ab-ratio').textContent = abRatio.toFixed(2);
+  document.getElementById('eng-idx').textContent = engIdx.toFixed(2);
+
+  const bands = [{name:'Theta', val:theta},{name:'Alpha', val:alpha},{name:'Beta', val:beta}];
+  const dom = bands.reduce((a,b) => a.val > b.val ? a : b);
+  document.getElementById('dom-band').textContent = dom.name;
+
+  const fill = document.getElementById('eng-fill');
+  fill.style.width = engPct.toFixed(0) + '%';
+
+  let color, stateText, explainText;
+  if (engIdx < 0.25) {
+    color = '#9FE1CB';
+    stateText = 'Low engagement — resting';
+    explainText = 'Alpha is dominant. The brain is in a relaxed, idling state — visual cortex is quiet, internal thought is low-effort. This matches eyes-closed or unfocused resting.';
+  } else if (engIdx < 0.55) {
+    color = '#FAC775';
+    stateText = 'Moderate engagement — alert';
+    explainText = 'Alpha and beta are balanced. The brain is awake and alert but not under heavy cognitive load. Eyes-open resting or light attention falls here.';
+  } else if (engIdx < 0.90) {
+    color = '#378ADD';
+    stateText = 'High engagement — active thinking';
+    explainText = 'Beta is rising. Event-Related Desynchronization (ERD) is suppressing alpha as the brain allocates more resources to cognitive processing — typical during problem-solving or mental arithmetic.';
+  } else {
+    color = '#534AB7';
+    stateText = 'Very high engagement — deep focus';
+    explainText = 'Beta strongly dominates. Alpha is suppressed across frontal and parietal regions. The brain is under high cognitive workload — sustained attention, calculation, or complex reasoning.';
+  }
+
+  fill.style.background = color;
+  document.getElementById('state-text').textContent = stateText;
+  document.getElementById('explain-box').textContent = explainText;
+}
+
+update();
+</script>
