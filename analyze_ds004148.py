@@ -338,6 +338,106 @@ def save_engagement_score_plot(model, df, test_subjects, output_dir, smoothing_a
     return subject, smoothing_alpha
 
 
+def save_recording_level_smoothed_classification(
+    model,
+    df,
+    test_subjects,
+    output_dir,
+    smoothing_alpha=0.35,
+    threshold=0.5,
+):
+    test_df = df[df["subject"].isin(test_subjects)].copy()
+    window_rows = []
+    recording_rows = []
+
+    group_cols = ["subject", "session", "task"]
+    for (subject, session, task), group in test_df.groupby(group_cols):
+        group = group.sort_values("time_start_seconds").copy()
+        raw_scores = model.predict_proba(group[FEATURE_COLS])[:, 1]
+        smoothed_scores = exponential_moving_average(raw_scores, alpha=smoothing_alpha)
+
+        true_label = int(group["label"].iloc[0])
+        mean_raw_score = float(np.mean(raw_scores))
+        mean_smoothed_score = float(np.mean(smoothed_scores))
+        final_smoothed_score = float(smoothed_scores[-1])
+        predicted_label = int(mean_smoothed_score >= threshold)
+        window_seconds = float(group["window_seconds"].iloc[0])
+
+        task_window_df = group[
+            ["subject", "session", "task", "segment_id", "window_idx", "time_start_seconds", "label"]
+        ].copy()
+        task_window_df["xgboost_raw_high_engagement_probability"] = raw_scores
+        task_window_df["xgboost_smoothed_high_engagement_probability"] = smoothed_scores
+        task_window_df["smoothing_alpha"] = smoothing_alpha
+        window_rows.append(task_window_df)
+
+        recording_rows.append(
+            {
+                "subject": subject,
+                "session": session,
+                "task": task,
+                "true_label": true_label,
+                "true_label_name": TASK_TO_DISPLAY[task],
+                "n_windows": int(len(group)),
+                "duration_seconds": float(len(group) * window_seconds),
+                "mean_raw_high_engagement_probability": mean_raw_score,
+                "mean_smoothed_high_engagement_probability": mean_smoothed_score,
+                "final_smoothed_high_engagement_probability": final_smoothed_score,
+                "classification_score_used": mean_smoothed_score,
+                "threshold": threshold,
+                "predicted_label": predicted_label,
+                "predicted_label_name": (
+                    "high_engagement_proxy" if predicted_label == 1 else "low_engagement_proxy"
+                ),
+                "correct": bool(predicted_label == true_label),
+            }
+        )
+
+    window_df = pd.concat(window_rows, ignore_index=True)
+    recording_df = pd.DataFrame(recording_rows)
+
+    window_df.to_csv(
+        output_dir / "ds004148_xgboost_smoothed_window_predictions_test.csv",
+        index=False,
+    )
+    recording_df.to_csv(
+        output_dir / "ds004148_xgboost_smoothed_recording_classification.csv",
+        index=False,
+    )
+
+    y_true = recording_df["true_label"]
+    y_pred = recording_df["predicted_label"]
+    report = classification_report(
+        y_true,
+        y_pred,
+        target_names=["low_engagement_proxy", "high_engagement_proxy"],
+        output_dict=True,
+        zero_division=0,
+    )
+
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(
+        confusion_matrix=cm,
+        display_labels=["low_engagement_proxy", "high_engagement_proxy"],
+    )
+    disp.plot()
+    plt.title("Whole-recording smoothed XGBoost confusion matrix")
+    plt.tight_layout()
+    plt.savefig(output_dir / "ds004148_xgboost_smoothed_recording_confusion_matrix.png", dpi=150)
+    plt.close()
+
+    return {
+        "n_recordings": int(len(recording_df)),
+        "n_test_subjects": int(len(test_subjects)),
+        "aggregation": "mean_smoothed_high_engagement_probability",
+        "smoothing": "exponential_moving_average",
+        "smoothing_alpha": smoothing_alpha,
+        "threshold": threshold,
+        "accuracy": report["accuracy"],
+        "report": report,
+    }
+
+
 def compute_task_channel_bandpower(dataset_root, session, tasks, window_seconds, max_windows_per_recording):
     task_values = {
         task: {
@@ -588,6 +688,13 @@ def run_classifiers(df, output_dir):
     )
     save_xgboost_feature_importance(xgboost_model, output_dir)
     score_subject, smoothing_alpha = save_engagement_score_plot(xgboost_model, df, test_subjects, output_dir)
+    recording_report = save_recording_level_smoothed_classification(
+        xgboost_model,
+        df,
+        test_subjects,
+        output_dir,
+        smoothing_alpha=smoothing_alpha,
+    )
 
     return {
         "split_mode": "subject",
@@ -604,6 +711,7 @@ def run_classifiers(df, output_dir):
             "logistic_regression": logistic_report,
             "xgboost": xgboost_report,
         },
+        "recording_level_smoothed_xgboost": recording_report,
     }
 
 

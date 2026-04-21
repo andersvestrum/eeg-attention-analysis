@@ -28,6 +28,7 @@ The current analysis uses `session1` from 60 subjects. Each EEG recording is spl
 | Main model | XGBoost binary classifier |
 | XGBoost accuracy | 64.3% |
 | XGBoost macro F1 | 63.9% |
+| Whole-recording smoothed XGBoost accuracy | 70.0% |
 
 Important interpretation: the model does not detect boredom directly. It estimates whether a 10-second EEG window looks more like the resting `eyesclosed` condition or the cognitively active `mathematic` condition.
 
@@ -56,6 +57,7 @@ flowchart LR
     N --> O["Feature importance"]
     N --> S["Raw per-window predictions"]
     S --> P["Smoothed engagement proxy score over time"]
+    P --> T["Whole-recording prediction"]
     R --> Q["Topographic scalp maps"]
 ```
 
@@ -87,6 +89,9 @@ flowchart LR
 | [`ds004148_xgboost_feature_importance.png`](processed/ds004148/ds004148_xgboost_feature_importance.png) | Bar chart of the most useful model features. | The top features include frontal theta, theta/beta ratios, beta power, and beta/alpha ratio. |
 | [`ds004148_xgboost_engagement_score_over_time.png`](processed/ds004148/ds004148_xgboost_engagement_score_over_time.png) | Raw and smoothed XGBoost probability over time for one held-out subject. | The y-axis is `P(high-engagement proxy)`, meaning how mathematic-like each 10-second window appears to the model. The smoothed line conditions each displayed score on previous scores. |
 | [`ds004148_xgboost_engagement_score_over_time.csv`](processed/ds004148/ds004148_xgboost_engagement_score_over_time.csv) | Numeric values behind the engagement-over-time plot. | Includes raw per-window probabilities and smoothed probabilities for the plotted subject. |
+| [`ds004148_xgboost_smoothed_window_predictions_test.csv`](processed/ds004148/ds004148_xgboost_smoothed_window_predictions_test.csv) | Raw and smoothed 10-second predictions for every held-out test recording. | Use this to inspect the discrete timesteps that feed the whole-recording classifier. |
+| [`ds004148_xgboost_smoothed_recording_classification.csv`](processed/ds004148/ds004148_xgboost_smoothed_recording_classification.csv) | One row per held-out ~5-minute recording. | This is the downstream whole-recording result: each recording is classified from the mean smoothed score across its 10-second windows. |
+| [`ds004148_xgboost_smoothed_recording_confusion_matrix.png`](processed/ds004148/ds004148_xgboost_smoothed_recording_confusion_matrix.png) | Confusion matrix for whole-recording classification. | Evaluates 30 held-out recordings: 15 eyes-closed and 15 math recordings. Accuracy is 70.0%. |
 
 #### How To Read The Engagement-Over-Time Plot
 
@@ -145,6 +150,32 @@ smoothed_score[t] = 0.35 * raw_score[t] + 0.65 * smoothed_score[t-1]
 ```
 
 This means the displayed smoothed score for each window depends partly on the current window and partly on the previous smoothed prediction. It is not a full sequence model, but it is a simple and explainable way to make the time-series plot reflect temporal continuity.
+
+## Whole-Recording Classification
+
+We also classify the entire ~5-minute recording using the smoothed discrete timesteps.
+
+The logic is:
+
+```text
+5-minute recording
+-> split into 30 windows of 10 seconds each
+-> predict XGBoost P(high-engagement) for each window
+-> smooth those probabilities over time
+-> average the smoothed probabilities
+-> classify the whole recording
+```
+
+The current rule is:
+
+```text
+if mean_smoothed_probability >= 0.5:
+    classify as high_engagement_proxy / mathematic-like
+else:
+    classify as low_engagement_proxy / eyesclosed-like
+```
+
+This gives one final prediction per recording instead of one prediction per 10-second window. On the held-out test set, this evaluates 30 recordings total: 15 `eyesclosed` recordings and 15 `mathematic` recordings. The current whole-recording smoothed XGBoost accuracy is 70.0%.
 
 ## Model Logic
 
