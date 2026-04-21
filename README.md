@@ -197,7 +197,7 @@ and engagement using public brain-signal datasets.
 ## How to use it
 
 Open the simulator here:
-https://jackpham-rgb.github.io/engagement_simulator.html
+[Engagement Simulator](https://jackpham-rgb.github.io/engagement_simulator.html)
 
 Use the sliders to adjust theta, alpha, and beta brainwave power levels.
 The engagement index, alpha/beta ratio, and brain state update in real time.
