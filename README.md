@@ -181,9 +181,39 @@ source .venv/bin/activate
 python analyze_ds004148.py --session session1 --tasks eyesclosed mathematic --reuse-feature-table
 ```
 
-## Additional resources
-- [Interactive engagement index simulator](simulator/engagement_simulator.html)
-  — adjust brainwave sliders to see the Pope et al. formula live.
+# EEG Engagement Index Simulator
+
+An interactive browser-based tool that visualizes how EEG brainwave 
+frequency bands relate to cognitive engagement, based on the Pope, 
+Bogart & Bartolome (1995) engagement index formula.
+
+## What it is
+
+This simulator was built as a companion to the 
+[eeg-attention-analysis](https://github.com/andersvestrum/eeg-attention-analysis) 
+project — a UC Berkeley EEG signal analysis project studying attention 
+and engagement using public brain-signal datasets.
+
+## How to use it
+
+Open the simulator here:
+https://jackpham-rgb.github.io/engagement_simulator.html
+
+Use the sliders to adjust theta, alpha, and beta brainwave power levels.
+The engagement index, alpha/beta ratio, and brain state update in real time.
+
+## The formula
+
+E = β / (α + θ)
+
+- **Beta (13–30 Hz)** rises during active cognition and focused attention
+- **Alpha (8–12 Hz)** is the brain's idle rhythm — drops when attention engages (ERD)
+- **Theta (4–7 Hz)** rises during drowsiness and mind-wandering
+
+## Reference
+
+Pope, A. T., Bogart, E. H., & Bartolome, D. S. (1995). Biocybernetic system 
+evaluates options for enhancing operator attention. *Proceedings of SPIE*.
 
 ## What We Can Claim
 
