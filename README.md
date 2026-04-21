@@ -181,6 +181,10 @@ source .venv/bin/activate
 python analyze_ds004148.py --session session1 --tasks eyesclosed mathematic --reuse-feature-table
 ```
 
+## Additional resources
+- [Interactive engagement index simulator](simulator/engagement_simulator.html)
+  — adjust brainwave sliders to see the Pope et al. formula live.
+
 ## What We Can Claim
 
 This is a valid class-project result if we describe it carefully:
