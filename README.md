@@ -11,7 +11,7 @@ cannot stop. What is the brain actually doing during that state?
 This project uses public EEG recordings to study the neural signatures of
 attention and disengagement. We cannot measure doomscrolling directly in a lab,
 but we can measure the difference between a brain that is actively working and
-a brain that is idling — and build a model that tells them apart.
+a brain that is idling, and build a model that tells them apart.
 
 > **Core question:** Can EEG frequency-band features distinguish resting brain
 > states from cognitively active brain states, and can we use this distinction
@@ -27,6 +27,53 @@ The original idea was to detect boredom from repeated images. Because this datas
 - `mathematic` = higher-engagement / cognitive-workload proxy
 
 The current results are in [`processed/ds004148`](processed/ds004148).
+
+---
+
+## The neuroscience
+
+### Why the brain disengages
+
+The brain needs changing stimuli to stay alert. When stimuli become repetitive
+and non-threatening, the brain enters **repetition suppression** — signals
+associated with familiar, low-value input are dampened to conserve metabolic
+energy. In the context of infinite social media feeds, this becomes a trap.
+
+During doomscrolling, research by Sharma (2022) and Kennerley (2011) suggests
+the **amygdala remains alert** — registering emotional salience from each post —
+while the **thalamus enters repetition suppression**, reducing the depth of
+actual cognitive processing. The result is a paradox: high-stress disengagement.
+
+### The Thalamocortical Loop
+
+The mechanism behind attention is the **Thalamocortical Loop** — a feedback
+circuit between the thalamus (a deep brain relay center) and the cortex
+(responsible for higher cognition).
+
+- **High engagement:** The thalamus breaks its rhythmic pulse and relays signals
+  dynamically. Individual neuron clusters fire independently — **desynchronized**
+  state. This appears in EEG as **beta wave dominance**.
+
+- **Low engagement:** The thalamus fires rhythmically and synchronously, sending
+  a "do not disturb" signal that suppresses external input — **synchronized**
+  idling. This appears in EEG as **alpha wave dominance** over parietal and
+  occipital regions.
+
+### The three bands we measure
+
+| Band | Frequency | Brain state | Key regions |
+| --- | --- | --- | --- |
+| **Theta** | 4–7 Hz | Drowsiness, mind-wandering, fatigue | Frontal cortex |
+| **Alpha** | 8–12 Hz | Cortical idling, repetition suppression | Parietal, occipital |
+| **Beta** | 13–30 Hz | Active cognition, focused attention | Frontal, central |
+
+When attention engages, alpha synchronization breaks down — a process called
+**Event-Related Desynchronization (ERD)**, first described by Pfurtscheller &
+Aranibar (1977). Alpha drops, beta rises.
+
+### The engagement index
+
+We quantify brain state using Pope, Bogart & Bartolome (1995):
 
 ## Current Result Summary
 
