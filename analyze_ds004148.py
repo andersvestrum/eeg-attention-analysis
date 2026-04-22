@@ -45,6 +45,10 @@ BASE_FEATURE_COLS = [
     "log_theta_power",
     "log_alpha_power",
     "log_beta_power",
+    "frontal_alpha_asymmetry_log_lr",
+    "frontal_beta_asymmetry_log_lr",
+    "posterior_alpha_asymmetry_log_lr",
+    "posterior_beta_asymmetry_log_lr",
 ]
 
 TEMPORAL_SEED_COLS = [
@@ -86,6 +90,13 @@ REGIONS = {
         "POz", "PO3", "PO4", "PO7", "PO8",
         "Oz", "O1", "O2",
     ],
+}
+
+ASYM_PAIRS = {
+    "frontal_left": ["Fp1", "AF3", "AF7", "F1", "F3", "F5", "F7", "FC1", "FC3", "FC5", "FT7"],
+    "frontal_right": ["Fp2", "AF4", "AF8", "F2", "F4", "F6", "F8", "FC2", "FC4", "FC6", "FT8"],
+    "posterior_left": ["P1", "P3", "P5", "P7", "PO3", "PO7", "O1"],
+    "posterior_right": ["P2", "P4", "P6", "P8", "PO4", "PO8", "O2"],
 }
 
 
@@ -133,6 +144,21 @@ def get_region_subset(data, ch_names, region_name):
     return data[:, idx]
 
 
+def get_named_channel_subset(data, ch_names, target_names):
+    idx = [i for i, ch in enumerate(ch_names) if ch in target_names]
+    if not idx:
+        raise ValueError("No channels found for requested channel set")
+    return data[:, idx]
+
+
+def asymmetry_log_lr(data, sfreq, ch_names, left_names, right_names, band):
+    left_data = get_named_channel_subset(data, ch_names, left_names)
+    right_data = get_named_channel_subset(data, ch_names, right_names)
+    left_power, _ = bandpower(left_data, sfreq, band)
+    right_power, _ = bandpower(right_data, sfreq, band)
+    return float(np.log((left_power + 1e-12) / (right_power + 1e-12)))
+
+
 def compute_features_from_array(data, sfreq, ch_names):
     theta_abs, theta_rel = bandpower(data, sfreq, (4, 7))
     alpha_abs, alpha_rel = bandpower(data, sfreq, (8, 12))
@@ -145,6 +171,18 @@ def compute_features_from_array(data, sfreq, ch_names):
     frontal_theta_abs, frontal_theta_rel = bandpower(frontal, sfreq, (4, 7))
     posterior_alpha_abs, posterior_alpha_rel = bandpower(posterior, sfreq, (8, 12))
     central_beta_abs, central_beta_rel = bandpower(central, sfreq, (13, 30))
+    frontal_alpha_asymmetry = asymmetry_log_lr(
+        data, sfreq, ch_names, ASYM_PAIRS["frontal_left"], ASYM_PAIRS["frontal_right"], (8, 12)
+    )
+    frontal_beta_asymmetry = asymmetry_log_lr(
+        data, sfreq, ch_names, ASYM_PAIRS["frontal_left"], ASYM_PAIRS["frontal_right"], (13, 30)
+    )
+    posterior_alpha_asymmetry = asymmetry_log_lr(
+        data, sfreq, ch_names, ASYM_PAIRS["posterior_left"], ASYM_PAIRS["posterior_right"], (8, 12)
+    )
+    posterior_beta_asymmetry = asymmetry_log_lr(
+        data, sfreq, ch_names, ASYM_PAIRS["posterior_left"], ASYM_PAIRS["posterior_right"], (13, 30)
+    )
 
     return {
         "theta_power": theta_abs,
@@ -168,6 +206,10 @@ def compute_features_from_array(data, sfreq, ch_names):
         "log_theta_power": np.log1p(theta_abs),
         "log_alpha_power": np.log1p(alpha_abs),
         "log_beta_power": np.log1p(beta_abs),
+        "frontal_alpha_asymmetry_log_lr": frontal_alpha_asymmetry,
+        "frontal_beta_asymmetry_log_lr": frontal_beta_asymmetry,
+        "posterior_alpha_asymmetry_log_lr": posterior_alpha_asymmetry,
+        "posterior_beta_asymmetry_log_lr": posterior_beta_asymmetry,
     }
 
 
@@ -183,7 +225,9 @@ def available_vhdrs(dataset_root, session, tasks):
     return vhdrs
 
 
-def load_windows_from_recording(vhdr_path, task, session, window_seconds, max_windows_per_recording):
+def load_windows_from_recording(
+    vhdr_path, task, session, window_seconds, window_step_seconds, max_windows_per_recording
+):
     raw = mne.io.read_raw_brainvision(vhdr_path, preload=True, verbose=False)
     raw.pick("eeg")
     raw.notch_filter(freqs=[60.0], verbose=False)
@@ -194,14 +238,20 @@ def load_windows_from_recording(vhdr_path, task, session, window_seconds, max_wi
     ch_names = raw.ch_names
     sfreq = float(raw.info["sfreq"])
     window_size = int(window_seconds * sfreq)
-    n_complete_windows = data.shape[0] // window_size
-    if max_windows_per_recording is not None:
-        n_complete_windows = min(n_complete_windows, max_windows_per_recording)
+    step_size = int(window_step_seconds * sfreq)
+    if step_size <= 0:
+        raise ValueError("window_step_seconds must produce a positive step size")
 
     subject = vhdr_path.name.split("_")[0]
     rows = []
-    for window_idx in range(n_complete_windows):
-        start = window_idx * window_size
+    max_start = data.shape[0] - window_size
+    if max_start < 0:
+        return rows
+    starts = range(0, max_start + 1, step_size)
+
+    for window_idx, start in enumerate(starts):
+        if max_windows_per_recording is not None and window_idx >= max_windows_per_recording:
+            break
         stop = start + window_size
         segment = data[start:stop]
         feats = compute_features_from_array(segment, sfreq, ch_names)
@@ -226,7 +276,9 @@ def load_windows_from_recording(vhdr_path, task, session, window_seconds, max_wi
     return rows
 
 
-def build_feature_table(dataset_root, session, tasks, window_seconds, max_windows_per_recording):
+def build_feature_table(
+    dataset_root, session, tasks, window_seconds, window_step_seconds, max_windows_per_recording
+):
     rows = []
     vhdrs = available_vhdrs(dataset_root, session=session, tasks=tasks)
     if not vhdrs:
@@ -243,6 +295,7 @@ def build_feature_table(dataset_root, session, tasks, window_seconds, max_window
                 task=task,
                 session=session,
                 window_seconds=window_seconds,
+                window_step_seconds=window_step_seconds,
                 max_windows_per_recording=max_windows_per_recording,
             )
         )
@@ -360,7 +413,15 @@ def save_engagement_score_plot(model, df, test_subjects, feature_cols, output_di
     return subject, smoothing_alpha
 
 
-def compute_task_channel_bandpower(dataset_root, session, tasks, window_seconds, max_windows_per_recording):
+def compute_task_channel_bandpower(
+    dataset_root,
+    session,
+    tasks,
+    window_seconds,
+    window_step_seconds,
+    max_windows_per_recording,
+    subject_filter=None,
+):
     task_values = {
         task: {
             "alpha": [],
@@ -374,6 +435,9 @@ def compute_task_channel_bandpower(dataset_root, session, tasks, window_seconds,
 
     for vhdr_path in available_vhdrs(dataset_root, session=session, tasks=tasks):
         task = vhdr_path.name.split("_task-")[1].split("_eeg.vhdr")[0]
+        subject = vhdr_path.name.split("_")[0]
+        if subject_filter is not None and subject != subject_filter:
+            continue
         raw = mne.io.read_raw_brainvision(vhdr_path, preload=True, verbose=False)
         raw.pick("eeg")
         raw.notch_filter(freqs=[60.0], verbose=False)
@@ -387,12 +451,17 @@ def compute_task_channel_bandpower(dataset_root, session, tasks, window_seconds,
 
         sfreq = float(raw.info["sfreq"])
         window_size = int(window_seconds * sfreq)
-        n_complete_windows = data.shape[0] // window_size
-        if max_windows_per_recording is not None:
-            n_complete_windows = min(n_complete_windows, max_windows_per_recording)
+        step_size = int(window_step_seconds * sfreq)
+        if step_size <= 0:
+            raise ValueError("window_step_seconds must produce a positive step size")
 
-        for window_idx in range(n_complete_windows):
-            start = window_idx * window_size
+        max_start = data.shape[0] - window_size
+        if max_start < 0:
+            continue
+        starts = range(0, max_start + 1, step_size)
+        for window_idx, start in enumerate(starts):
+            if max_windows_per_recording is not None and window_idx >= max_windows_per_recording:
+                break
             stop = start + window_size
             segment = data[start:stop]
             alpha = per_channel_bandpower(segment, sfreq, (8, 12))
@@ -432,7 +501,61 @@ def save_topomap(values, ch_names, sfreq, title, output_path):
     plt.close()
 
 
-def save_task_difference_topomaps(dataset_root, session, tasks, window_seconds, max_windows_per_recording, output_dir):
+def save_alpha_comparison_panel(alpha_eyesclosed, alpha_mathematic, ch_names, sfreq, output_path):
+    alpha_diff = alpha_eyesclosed - alpha_mathematic
+
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types="eeg")
+    info.set_montage("standard_1020", on_missing="ignore")
+    montage = info.get_montage()
+    pos_names = set(montage.ch_names) if montage is not None else set()
+    keep_idx = [i for i, ch in enumerate(ch_names) if ch in pos_names]
+    keep_names = [ch_names[i] for i in keep_idx]
+
+    eyes_vals = np.asarray(alpha_eyesclosed)[keep_idx]
+    math_vals = np.asarray(alpha_mathematic)[keep_idx]
+    diff_vals = np.asarray(alpha_diff)[keep_idx]
+
+    plot_info = mne.create_info(ch_names=keep_names, sfreq=sfreq, ch_types="eeg")
+    plot_info.set_montage("standard_1020", on_missing="ignore")
+
+    abs_vmax = float(
+        max(
+            np.max(np.abs(eyes_vals)),
+            np.max(np.abs(math_vals)),
+            1e-12,
+        )
+    )
+    diff_abs_vmax = float(max(np.max(np.abs(diff_vals)), 1e-12))
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.8), constrained_layout=True)
+    im_eyes, _ = mne.viz.plot_topomap(
+        eyes_vals, plot_info, axes=axes[0], show=False, vlim=(-abs_vmax, abs_vmax), cmap="RdBu_r"
+    )
+    axes[0].set_title("Alpha: eyesclosed")
+
+    im_math, _ = mne.viz.plot_topomap(
+        math_vals, plot_info, axes=axes[1], show=False, vlim=(-abs_vmax, abs_vmax), cmap="RdBu_r"
+    )
+    axes[1].set_title("Alpha: mathematic")
+
+    im_diff, _ = mne.viz.plot_topomap(
+        diff_vals, plot_info, axes=axes[2], show=False, vlim=(-diff_abs_vmax, diff_abs_vmax), cmap="RdBu_r"
+    )
+    axes[2].set_title("Alpha difference: eyesclosed - mathematic")
+
+    cbar_main = fig.colorbar(im_eyes, ax=axes[:2], shrink=0.75, fraction=0.05, pad=0.06)
+    cbar_main.set_label("Alpha power (a.u.)")
+    cbar_diff = fig.colorbar(im_diff, ax=axes[2], shrink=0.75, fraction=0.05, pad=0.06)
+    cbar_diff.set_label("Difference (a.u.)")
+
+    fig.suptitle("Group-average alpha topomap comparison", fontsize=13)
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def save_task_difference_topomaps(
+    dataset_root, session, tasks, window_seconds, window_step_seconds, max_windows_per_recording, output_dir
+):
     required = {"eyesclosed", "mathematic"}
     if not required.issubset(set(tasks)):
         return
@@ -442,6 +565,7 @@ def save_task_difference_topomaps(dataset_root, session, tasks, window_seconds, 
         session=session,
         tasks=["eyesclosed", "mathematic"],
         window_seconds=window_seconds,
+        window_step_seconds=window_step_seconds,
         max_windows_per_recording=max_windows_per_recording,
     )
     if ch_names is None or not means["eyesclosed"] or not means["mathematic"]:
@@ -450,6 +574,13 @@ def save_task_difference_topomaps(dataset_root, session, tasks, window_seconds, 
     alpha_diff = means["eyesclosed"]["alpha"] - means["mathematic"]["alpha"]
     beta_diff = means["mathematic"]["beta"] - means["eyesclosed"]["beta"]
     ratio_diff = means["mathematic"]["beta_alpha_ratio"] - means["eyesclosed"]["beta_alpha_ratio"]
+    save_alpha_comparison_panel(
+        alpha_eyesclosed=means["eyesclosed"]["alpha"],
+        alpha_mathematic=means["mathematic"]["alpha"],
+        ch_names=ch_names,
+        sfreq=sfreq,
+        output_path=output_dir / "ds004148_alpha_power_topomap_comparison_panel.png",
+    )
 
     save_topomap(
         alpha_diff,
@@ -457,6 +588,13 @@ def save_task_difference_topomaps(dataset_root, session, tasks, window_seconds, 
         sfreq,
         "Alpha power difference: eyesclosed minus mathematic",
         output_dir / "ds004148_topomap_alpha_eyesclosed_minus_mathematic.png",
+    )
+    save_topomap(
+        alpha_diff,
+        ch_names,
+        sfreq,
+        "Alpha power (avg): eyesclosed minus mathematic",
+        output_dir / "ds004148_alpha_power_topomap_eyesclosed_minus_mathematic_avg.png",
     )
     save_topomap(
         beta_diff,
@@ -472,6 +610,60 @@ def save_task_difference_topomaps(dataset_root, session, tasks, window_seconds, 
         "Beta/alpha ratio difference: mathematic minus eyesclosed",
         output_dir / "ds004148_topomap_beta_alpha_ratio_mathematic_minus_eyesclosed.png",
     )
+
+
+def save_subject_alpha_topomaps(
+    dataset_root,
+    session,
+    tasks,
+    window_seconds,
+    window_step_seconds,
+    max_windows_per_recording,
+    output_dir,
+    subject,
+):
+    required = {"eyesclosed", "mathematic"}
+    if not required.issubset(set(tasks)):
+        return False
+
+    means, ch_names, sfreq = compute_task_channel_bandpower(
+        dataset_root=dataset_root,
+        session=session,
+        tasks=["eyesclosed", "mathematic"],
+        window_seconds=window_seconds,
+        window_step_seconds=window_step_seconds,
+        max_windows_per_recording=max_windows_per_recording,
+        subject_filter=subject,
+    )
+    if ch_names is None or not means["eyesclosed"] or not means["mathematic"]:
+        return False
+
+    alpha_eyesclosed = means["eyesclosed"]["alpha"]
+    alpha_mathematic = means["mathematic"]["alpha"]
+    alpha_diff = alpha_eyesclosed - alpha_mathematic
+
+    save_topomap(
+        alpha_eyesclosed,
+        ch_names,
+        sfreq,
+        f"{subject} alpha power: eyesclosed",
+        output_dir / f"ds004148_{subject}_alpha_eyesclosed_topomap.png",
+    )
+    save_topomap(
+        alpha_mathematic,
+        ch_names,
+        sfreq,
+        f"{subject} alpha power: mathematic",
+        output_dir / f"ds004148_{subject}_alpha_mathematic_topomap.png",
+    )
+    save_topomap(
+        alpha_diff,
+        ch_names,
+        sfreq,
+        f"{subject} alpha power difference: eyesclosed minus mathematic",
+        output_dir / f"ds004148_{subject}_alpha_eyesclosed_minus_mathematic_topomap.png",
+    )
+    return True
 
 
 def split_by_subject(df, test_size=0.25, random_state=42):
@@ -703,12 +895,23 @@ def main():
     parser.add_argument("--dataset-root", default="data/ds004148")
     parser.add_argument("--session", default="session1")
     parser.add_argument("--window-seconds", type=int, default=10)
+    parser.add_argument(
+        "--window-step-seconds",
+        type=float,
+        default=5.0,
+        help="Sliding window stride in seconds (smaller than window-seconds enables overlap).",
+    )
     parser.add_argument("--max-windows-per-recording", type=int, default=None)
     parser.add_argument("--tasks", nargs="+", default=["eyesclosed", "mathematic"])
     parser.add_argument(
         "--reuse-feature-table",
         action="store_true",
         help="Reuse processed/ds004148/ds004148_features.csv instead of rereading raw EEG files.",
+    )
+    parser.add_argument(
+        "--subject-alpha-topomap",
+        default=None,
+        help="Optional subject ID (e.g., sub-01) to save subject-specific alpha topomaps.",
     )
     args = parser.parse_args()
 
@@ -727,6 +930,7 @@ def main():
             session=args.session,
             tasks=args.tasks,
             window_seconds=args.window_seconds,
+            window_step_seconds=args.window_step_seconds,
             max_windows_per_recording=args.max_windows_per_recording,
         )
         df.to_csv(feature_table_path, index=False)
@@ -739,10 +943,23 @@ def main():
             session=args.session,
             tasks=args.tasks,
             window_seconds=args.window_seconds,
+            window_step_seconds=args.window_step_seconds,
             max_windows_per_recording=args.max_windows_per_recording,
             output_dir=output_dir,
         )
     report = run_classifiers(df, output_dir)
+    subject_alpha_topomap_saved = False
+    if not args.reuse_feature_table and args.subject_alpha_topomap:
+        subject_alpha_topomap_saved = save_subject_alpha_topomaps(
+            dataset_root=dataset_root,
+            session=args.session,
+            tasks=args.tasks,
+            window_seconds=args.window_seconds,
+            window_step_seconds=args.window_step_seconds,
+            max_windows_per_recording=args.max_windows_per_recording,
+            output_dir=output_dir,
+            subject=args.subject_alpha_topomap,
+        )
 
     summary = {
         "n_rows": int(len(df)),
@@ -750,7 +967,10 @@ def main():
         "task_counts": df["task"].value_counts().to_dict(),
         "session": args.session,
         "window_seconds": args.window_seconds,
+        "window_step_seconds": args.window_step_seconds,
         "classification_report": report,
+        "subject_alpha_topomap_target": args.subject_alpha_topomap,
+        "subject_alpha_topomap_saved": subject_alpha_topomap_saved,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
