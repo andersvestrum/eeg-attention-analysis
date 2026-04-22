@@ -1,4 +1,21 @@
 # EEG Attention Analysis
+### Using brainwave signals to study engagement, boredom, and the doomscrolling brain
+*UC Berkeley — Anders, Jack, Jake, Jason, and Noah*
+
+## The question we started with
+
+When people doomscroll, something strange happens. They keep consuming content
+even when they are not really engaged. Their attention has drifted, but they
+cannot stop. What is the brain actually doing during that state?
+
+This project uses public EEG recordings to study the neural signatures of
+attention and disengagement. We cannot measure doomscrolling directly in a lab,
+but we can measure the difference between a brain that is actively working and
+a brain that is idling — and build a model that tells them apart.
+
+> **Core question:** Can EEG frequency-band features distinguish resting brain
+> states from cognitively active brain states, and can we use this distinction
+> to build an engagement proxy model?
 
 This project analyzes public EEG recordings from OpenNeuro `ds004148` to study a proxy version of our original question:
 
