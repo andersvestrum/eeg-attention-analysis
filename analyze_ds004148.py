@@ -17,12 +17,13 @@ import pandas as pd
 from scipy.signal import welch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import ConfusionMatrixDisplay, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupKFold, RandomizedSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
-FEATURE_COLS = [
+BASE_FEATURE_COLS = [
     "theta_power",
     "alpha_power",
     "beta_power",
@@ -40,6 +41,22 @@ FEATURE_COLS = [
     "central_beta_rel_power",
     "posterior_alpha_to_central_beta_ratio",
     "frontal_theta_to_central_beta_ratio",
+    "engagement_index",
+    "log_theta_power",
+    "log_alpha_power",
+    "log_beta_power",
+]
+
+TEMPORAL_SEED_COLS = [
+    "theta_power",
+    "alpha_power",
+    "beta_power",
+    "theta_beta_ratio",
+    "alpha_beta_ratio",
+    "frontal_theta_power",
+    "posterior_alpha_power",
+    "central_beta_power",
+    "engagement_index",
 ]
 
 TASK_TO_LABEL = {
@@ -147,6 +164,10 @@ def compute_features_from_array(data, sfreq, ch_names):
         "central_beta_rel_power": central_beta_rel,
         "posterior_alpha_to_central_beta_ratio": posterior_alpha_abs / (central_beta_abs + 1e-12),
         "frontal_theta_to_central_beta_ratio": frontal_theta_abs / (central_beta_abs + 1e-12),
+        "engagement_index": beta_abs / (alpha_abs + theta_abs + 1e-12),
+        "log_theta_power": np.log1p(theta_abs),
+        "log_alpha_power": np.log1p(alpha_abs),
+        "log_beta_power": np.log1p(beta_abs),
     }
 
 
@@ -165,6 +186,7 @@ def available_vhdrs(dataset_root, session, tasks):
 def load_windows_from_recording(vhdr_path, task, session, window_seconds, max_windows_per_recording):
     raw = mne.io.read_raw_brainvision(vhdr_path, preload=True, verbose=False)
     raw.pick("eeg")
+    raw.notch_filter(freqs=[60.0], verbose=False)
     raw.filter(l_freq=1.0, h_freq=40.0, verbose=False)
     raw.set_eeg_reference("average", verbose=False)
 
@@ -256,8 +278,8 @@ def save_scatter(df, output_dir):
     plt.close()
 
 
-def save_xgboost_feature_importance(model, output_dir):
-    importances = pd.Series(model.feature_importances_, index=FEATURE_COLS).sort_values()
+def save_xgboost_feature_importance(model, feature_cols, output_dir):
+    importances = pd.Series(model.feature_importances_, index=feature_cols).sort_values()
     plt.figure(figsize=(10, 7))
     plt.barh(importances.index, importances.values)
     plt.xlabel("XGBoost feature importance")
@@ -284,7 +306,7 @@ def exponential_moving_average(values, alpha=0.35):
     return smoothed
 
 
-def save_engagement_score_plot(model, df, test_subjects, output_dir, smoothing_alpha=0.35):
+def save_engagement_score_plot(model, df, test_subjects, feature_cols, output_dir, smoothing_alpha=0.35):
     subject = sorted(test_subjects)[0]
     subject_df = df[df["subject"] == subject].copy()
     if subject_df.empty:
@@ -295,7 +317,7 @@ def save_engagement_score_plot(model, df, test_subjects, output_dir, smoothing_a
     plt.figure(figsize=(10, 5))
     for task in sorted(subject_df["task"].unique()):
         task_df = subject_df[subject_df["task"] == task].sort_values("time_start_seconds").copy()
-        raw_scores = model.predict_proba(task_df[FEATURE_COLS])[:, 1]
+        raw_scores = model.predict_proba(task_df[feature_cols])[:, 1]
         smoothed_scores = exponential_moving_average(raw_scores, alpha=smoothing_alpha)
 
         task_score_df = task_df[
@@ -354,6 +376,7 @@ def compute_task_channel_bandpower(dataset_root, session, tasks, window_seconds,
         task = vhdr_path.name.split("_task-")[1].split("_eeg.vhdr")[0]
         raw = mne.io.read_raw_brainvision(vhdr_path, preload=True, verbose=False)
         raw.pick("eeg")
+        raw.notch_filter(freqs=[60.0], verbose=False)
         raw.filter(l_freq=1.0, h_freq=40.0, verbose=False)
         raw.set_eeg_reference("average", verbose=False)
 
@@ -498,6 +521,50 @@ def fit_and_evaluate_model(model_name, clf, X_train, y_train, X_test, y_test, ou
     return report, clf
 
 
+def add_temporal_features(df, feature_cols, n_lags=2):
+    df = df.sort_values(["subject", "task", "window_idx"]).copy()
+    temporal_cols = []
+    for col in feature_cols:
+        for lag in range(1, n_lags + 1):
+            lag_col = f"{col}_lag{lag}"
+            df[lag_col] = df.groupby(["subject", "task"])[col].shift(lag)
+            temporal_cols.append(lag_col)
+
+        delta_col = f"{col}_delta1"
+        df[delta_col] = df[col] - df.groupby(["subject", "task"])[col].shift(1)
+        temporal_cols.append(delta_col)
+
+    return df, temporal_cols
+
+
+def tune_xgboost_with_group_cv(X, y, groups):
+    base = XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=1,
+    )
+    search = RandomizedSearchCV(
+        estimator=base,
+        param_distributions={
+            "n_estimators": [150, 250, 350, 450],
+            "max_depth": [2, 3, 4, 5],
+            "learning_rate": [0.01, 0.03, 0.05, 0.08, 0.12],
+            "subsample": [0.7, 0.8, 0.9, 1.0],
+            "colsample_bytree": [0.7, 0.8, 0.9, 1.0],
+            "min_child_weight": [1, 3, 5, 7],
+            "gamma": [0.0, 0.1, 0.3],
+        },
+        n_iter=24,
+        scoring="f1_macro",
+        cv=GroupKFold(n_splits=5),
+        random_state=42,
+        refit=True,
+    )
+    search.fit(X, y, groups=groups)
+    return search.best_estimator_, search.best_score_, search.best_params_
+
+
 def run_classifiers(df, output_dir):
     legacy_cm_path = output_dir / "ds004148_confusion_matrix.png"
     if legacy_cm_path.exists():
@@ -505,6 +572,7 @@ def run_classifiers(df, output_dir):
 
     cm_paths = [
         output_dir / "ds004148_logistic_regression_confusion_matrix.png",
+        output_dir / "ds004148_random_forest_confusion_matrix.png",
         output_dir / "ds004148_xgboost_confusion_matrix.png",
         legacy_cm_path,
     ]
@@ -543,9 +611,17 @@ def run_classifiers(df, output_dir):
             "test_class_counts": test_class_counts.to_dict(),
         }
 
-    X_train = train_df[FEATURE_COLS]
+    full_df, temporal_cols = add_temporal_features(df, TEMPORAL_SEED_COLS, n_lags=2)
+    feature_cols = BASE_FEATURE_COLS + temporal_cols
+
+    train_df = full_df[full_df["subject"].isin(train_subjects)].copy()
+    test_df = full_df[full_df["subject"].isin(test_subjects)].copy()
+    train_df = train_df.dropna(subset=feature_cols)
+    test_df = test_df.dropna(subset=feature_cols)
+
+    X_train = train_df[feature_cols]
     y_train = train_df["label"]
-    X_test = test_df[FEATURE_COLS]
+    X_test = test_df[feature_cols]
     y_test = test_df["label"]
 
     logistic_clf = Pipeline(
@@ -555,16 +631,8 @@ def run_classifiers(df, output_dir):
         ]
     )
 
-    xgboost_clf = XGBClassifier(
-        n_estimators=250,
-        max_depth=3,
-        learning_rate=0.03,
-        subsample=0.85,
-        colsample_bytree=0.85,
-        objective="binary:logistic",
-        eval_metric="logloss",
-        random_state=42,
-        n_jobs=1,
+    tuned_xgb, best_cv_f1_macro, best_params = tune_xgboost_with_group_cv(
+        X_train, y_train, train_df["subject"]
     )
 
     logistic_report, logistic_model = fit_and_evaluate_model(
@@ -577,17 +645,36 @@ def run_classifiers(df, output_dir):
         output_dir,
     )
 
-    xgboost_report, xgboost_model = fit_and_evaluate_model(
-        "xgboost",
-        xgboost_clf,
+    random_forest_clf = RandomForestClassifier(
+        n_estimators=500,
+        max_depth=None,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=1,
+    )
+    random_forest_report, random_forest_model = fit_and_evaluate_model(
+        "random_forest",
+        random_forest_clf,
         X_train,
         y_train,
         X_test,
         y_test,
         output_dir,
     )
-    save_xgboost_feature_importance(xgboost_model, output_dir)
-    score_subject, smoothing_alpha = save_engagement_score_plot(xgboost_model, df, test_subjects, output_dir)
+
+    xgboost_report, xgboost_model = fit_and_evaluate_model(
+        "xgboost",
+        tuned_xgb,
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        output_dir,
+    )
+    save_xgboost_feature_importance(xgboost_model, feature_cols, output_dir)
+    score_subject, smoothing_alpha = save_engagement_score_plot(
+        xgboost_model, full_df, test_subjects, feature_cols, output_dir
+    )
 
     return {
         "split_mode": "subject",
@@ -600,8 +687,12 @@ def run_classifiers(df, output_dir):
         "engagement_score_subject": score_subject,
         "engagement_score_smoothing": "exponential_moving_average",
         "engagement_score_smoothing_alpha": smoothing_alpha,
+        "feature_columns_used": feature_cols,
+        "xgboost_group_cv_best_f1_macro": float(best_cv_f1_macro),
+        "xgboost_best_params": best_params,
         "models": {
             "logistic_regression": logistic_report,
+            "random_forest": random_forest_report,
             "xgboost": xgboost_report,
         },
     }
